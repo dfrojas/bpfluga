@@ -30,3 +30,26 @@ Visualize your collected metrics in Grafana.
 
 #### RAG:
 Use the integrated RAG to answer questions about your collected metrics.
+
+
+**Once the VM is created:**
+
+Install Go
+
+`sudo snap install go --classic`
+
+Create a symlink to the asm-generic directory, to fix this error:
+
+```
+In file included from /usr/include/linux/bpf.h:11:
+/usr/include/linux/types.h:5:10: fatal error: 'asm/types.h' file not found
+    5 | #include <asm/types.h>
+      |          ^~~~~~~~~~~~~
+```
+
+`ln -sf /usr/include/asm-generic/ /usr/include/asm`
+
+Also install the following packages:
+
+`go get github.com/cilium/ebpf`
+`go get github.com/cilium/ebpf/link`

@@ -8,4 +8,13 @@ compile-coordinator:
 	go build -o coordinator coordinator.go
 
 load:
-	sudo ./coordinator root@142.93.126.252 ./loader/loader ./bpf/minimal.o /Users/diegorojas/.ssh/id_rsa_eBPFTests
+	sudo ./coordinator examples/deploy.yaml
+
+start-vm:
+	limactl start vm_ebpf
+
+open-vm:
+	limactl shell vm_ebpf
+
+create-vm:
+	limactl create vm_ebpf

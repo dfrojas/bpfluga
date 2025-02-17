@@ -16,6 +16,8 @@ mounts:
 provision:
 - mode: system
   script: |
+    #!/bin/bash
+    set -xe
     apt-get update
     apt-get install -y apt-transport-https ca-certificates curl clang llvm jq
     apt-get install -y libelf-dev libpcap-dev libbfd-dev binutils-dev build-essential make
