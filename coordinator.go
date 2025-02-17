@@ -50,6 +50,68 @@ type DeployJob struct {
 	ebpfObj   string
 }
 
+type Context map[string]interface {}
+
+type JobHandler interface {
+	Start() error
+	JobTransition(stepName string, next func(Context) error, ctx Context) error
+}
+
+type Task struct {}
+
+func (t *Task) JobTransition(stepName string, next func(Context) error, ctx Context) error {
+	log.Printf("Saved %s", stepName)
+	return next(ctx)
+}
+
+func (t *Task) JobComplete(ctx Context) error {
+	log.Printf("Job completed")
+	return nil
+}
+
+func (t *Task) Start() error {
+	deployConfigPath := os.Args[1]
+	deployConfig, err := loadConfig(deployConfigPath)
+
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// We add the file config and the first compilation in as a single stage because by only reading the config file
+	// we'd do not get any action.
+	loaderResultChan := compileLoader(deployConfig.EBPF.LoaderPath, deployConfig.EBPF.LoaderOutputPath)
+	loaderResult := <-loaderResultChan
+
+	if loaderResult.err != nil {
+		log.Fatalf("Loader compilation failed: %v", loaderResult.err)
+		// break TODO: How to stop the operation and log in DB this stage?
+	}
+
+	ctx := Context{
+		"deployConfig": deployConfig,
+	}
+
+	return t.JobTransition("start", t.CompileEBPF, ctx)
+}
+
+func (t *Task) CompileEBPF(ctx Context) error {
+	deployConfig := ctx["deployConfig"].(*DeployConfig)
+	ebpfResultChan := compileEBPF(deployConfig.EBPF.FilePath, deployConfig.EBPF.FileOutputPath)
+	ebpfResult := <-ebpfResultChan
+
+	if ebpfResult.err != nil {
+		log.Fatalf("eBPF compilation failed: %v", ebpfResult.err)
+		// break TODO: How to stop the operation and log in DB this stage?
+	}
+
+	return t.JobTransition("compileEBPF", t.DeployToHost, nil)
+}
+
+func (t *Task) DeployToHost(ctx Context) error {
+	return t.JobTransition("deployToHost", t.JobComplete, nil)
+}
+
+
 func loadConfig(filename string) (*DeployConfig, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -191,48 +253,54 @@ func deployWorker(deployJobs <-chan DeployJob, results chan<- error) {
 }
 
 func main() {
-	deployConfigPath := os.Args[1]
+	// deployConfigPath := os.Args[1]
 
-	deployConfig, err := loadConfig(deployConfigPath)
+	// deployConfig, err := loadConfig(deployConfigPath)
+	// if err != nil {
+	// 	log.Fatalf("Failed to load config: %v", err)
+	// }
+
+	var job JobHandler = &Task{}
+	err := job.Start()
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		log.Fatalf("Failed to start job: %v", err)
 	}
 
-	loaderResultChan := compileLoader(deployConfig.EBPF.LoaderPath, deployConfig.EBPF.LoaderOutputPath)
-	ebpfResultChan := compileEBPF(deployConfig.EBPF.FilePath, deployConfig.EBPF.FileOutputPath)
+	// loaderResultChan := compileLoader(deployConfig.EBPF.LoaderPath, deployConfig.EBPF.LoaderOutputPath)
+	// ebpfResultChan := compileEBPF(deployConfig.EBPF.FilePath, deployConfig.EBPF.FileOutputPath)
 
-	loaderResult := <-loaderResultChan
-	ebpfResult := <-ebpfResultChan
+	// loaderResult := <-loaderResultChan
+	// ebpfResult := <-ebpfResultChan
 
-	if loaderResult.err != nil {
-		log.Fatalf("Loader compilation failed: %v", loaderResult.err)
-	}
-	if ebpfResult.err != nil {
-		log.Fatalf("eBPF compilation failed: %v", ebpfResult.err)
-	}
+	// if loaderResult.err != nil {
+	// 	log.Fatalf("Loader compilation failed: %v", loaderResult.err)
+	// }
+	// if ebpfResult.err != nil {
+	// 	log.Fatalf("eBPF compilation failed: %v", ebpfResult.err)
+	// }
 
-	log.Printf("Loader compiled successfully: %s", loaderResult.outputPath)
-	log.Printf("eBPF compiled successfully: %s", ebpfResult.outputPath)
+	// log.Printf("Loader compiled successfully: %s", loaderResult.outputPath)
+	// log.Printf("eBPF compiled successfully: %s", ebpfResult.outputPath)
 
-	loaderBin := loaderResult.outputPath
-	ebpfObj := ebpfResult.outputPath
+	// loaderBin := loaderResult.outputPath
+	// ebpfObj := ebpfResult.outputPath
 
-	numWorkers := 2  // TODO: Investigate more about this.
-	deployJobs := make(chan DeployJob, numWorkers)
-	deployResults := make(chan error, numWorkers)
+	// numWorkers := 2  // TODO: Investigate more about this.
+	// deployJobs := make(chan DeployJob, numWorkers)
+	// deployResults := make(chan error, numWorkers)
 
-	for i := 0; i < numWorkers; i++ {
-		go deployWorker(deployJobs, deployResults)
-	}
+	// for i := 0; i < numWorkers; i++ {
+	// 	go deployWorker(deployJobs, deployResults)
+	// }
 
-	for _, host := range deployConfig.Hosts {
-		deployJobs <- DeployJob{host, loaderBin, ebpfObj}
-	}
-	close(deployJobs)
+	// for _, host := range deployConfig.Hosts {
+	// 	deployJobs <- DeployJob{host, loaderBin, ebpfObj}
+	// }
+	// close(deployJobs)
 
-	for i := 0; i < numWorkers; i++ {
-		if err := <-deployResults; err != nil {
-			log.Printf("Failed to deploy to host %s: %v", deployConfig.Hosts[i].Address, err)
-		}
-	}
+	// for i := 0; i < numWorkers; i++ {
+	// 	if err := <-deployResults; err != nil {
+	// 		log.Printf("Failed to deploy to host %s: %v", deployConfig.Hosts[i].Address, err)
+	// 	}
+	// }
 }
