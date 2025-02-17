@@ -1,3 +1,4 @@
+// TODO: Make it portable across different kernels using CO-RE (https://thegraynode.io/posts/portable_bpf_programs/ or bpf2go)
 package main
 
 import (
@@ -35,6 +36,12 @@ type DeployConfig struct {
 	Metrics []MetricsConfig `yaml:"metrics"`
 }
 
+type CompileResult struct {
+	name       string
+	outputPath string
+	err        error
+}
+
 func loadConfig(filename string) (*DeployConfig, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -50,53 +57,67 @@ func loadConfig(filename string) (*DeployConfig, error) {
 	return &deployConfig, nil
 }
 
-func compileLoader(loaderPath string, loaderOutputPath string) string {
-	// We assume that always the architecture is AMD64 just for the PoC since this is the chip of my local machine.
-	// for future implementation, I'll add support to compile with different flags.
-	cmd := exec.Command(
-		"go",
-		"build",
-		"-ldflags",
-		"-extldflags \"-static\"",
-		"-o",
-		loaderOutputPath,
-		loaderPath,
-	)
+func compileLoader(loaderPath string, loaderOutputPath string) <-chan CompileResult {
+	resultChannel := make(chan CompileResult)
 
-	cmd.Env = append(os.Environ(),
-		"GOOS=linux",
-		"GOARCH=amd64",
-		"CGO_ENABLED=0",
-	)
+	go func() {
+		defer close(resultChannel)
+		// We assume that always the architecture is AMD64 just for the PoC since this is the chip of my local machine.
+		// for future implementation, I'll add support to compile with different flags.
+		cmd := exec.Command(
+			"go",
+			"build",
+			"-ldflags",
+			"-extldflags \"-static\"",
+			"-o",
+			loaderOutputPath,
+			loaderPath,
+		)
 
-	fmt.Println(cmd.String())
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Fatalf("Failed to compile loader: %v\nOutput: %s", err, output)
-	}
+		cmd.Env = append(os.Environ(),
+			"GOOS=linux",
+			"GOARCH=amd64",
+			"CGO_ENABLED=0",
+		)
+	
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			resultChannel <- CompileResult{"loader", "", fmt.Errorf("Failed to compile loader: %v: %s", err, output)}
+			return
+		}
+		resultChannel <- CompileResult{"loader", loaderOutputPath, nil}
+	}()
 
-	return loaderOutputPath
+	return resultChannel
 }
 
-func compileEBPF(filePath string) string {
-	cmd := exec.Command(
-		"clang",
-		"-O2",
-		"-g",
-		"-target",
-		"bpf",
-		"-c",
-		filePath,
-		"-o",
-		filePath+".o",
-	)
+func compileEBPF(filePath string) <-chan CompileResult {
+	resultChannel := make(chan CompileResult)
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Fatalf("Failed to compile eBPF: %v\nOutput: %s", err, output)
-	}
+	go func() {
+		// TODO: Verify CO-RE or see the possibility to compile for a matrix of Kernels.
+		cmd := exec.Command(
+			"clang",
+			"-O2",
+			"-g",
+			"-target",
+			"bpf",
+			"-c",
+			filePath,
+			"-o",
+			filePath+".o",
+		)
 
-	return filePath + ".o"
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			resultChannel <- CompileResult{"ebpf", "", fmt.Errorf("Failed to compile eBPF: %v\nOutput: %s", err, output)}
+			return
+		}
+
+		resultChannel <- CompileResult{"ebpf", filePath + ".o", nil}
+	}()
+
+	return resultChannel
 }
 
 func main() {
@@ -114,8 +135,24 @@ func main() {
 
 	userAndAddress := fmt.Sprintf("%s@%s", user, address)
 
-	loaderBin := compileLoader(deployConfig.EBPF.LoaderPath, deployConfig.EBPF.LoaderOutputPath)
-	ebpfObj := compileEBPF(deployConfig.EBPF.FilePath)
+	loaderResultChan := compileLoader(deployConfig.EBPF.LoaderPath, deployConfig.EBPF.LoaderOutputPath)
+	ebpfResultChan := compileEBPF(deployConfig.EBPF.FilePath)
+
+	loaderResult := <- loaderResultChan
+    ebpfResult := <- ebpfResultChan
+
+    if loaderResult.err != nil {
+        log.Fatalf("Loader compilation failed: %v", loaderResult.err)
+    }
+	if ebpfResult.err != nil {
+		log.Fatalf("eBPF compilation failed: %v", ebpfResult.err)
+	}
+
+	log.Printf("Loader compiled successfully: %s", loaderResult.outputPath)
+	log.Printf("eBPF compiled successfully: %s", ebpfResult.outputPath)
+
+	loaderBin := loaderResult.outputPath
+	ebpfObj := ebpfResult.outputPath
 
 	remoteLoader := "/tmp/loader"
 	remoteObj := "/tmp/minimal.o"
