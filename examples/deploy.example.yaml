@@ -13,7 +13,10 @@ hosts:
 ebpf:
   sourceType: "local"  # Could be 'local' or 'inline'
   filePath: "./bpf/minimal.c"  # If local
-  compileFlags: "-O2"
+  fileOutputPath: "./bpf/minimal.o"
+  loaderPath: "./loader/loader.go"
+  loaderOutputPath: "./loader/loader"
+  compileFlags: "-O2"  # TODO: Add support for different flags
 
 metrics:
   - name: "tcp_connections"

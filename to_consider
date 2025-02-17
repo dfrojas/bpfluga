@@ -1,0 +1,36 @@
+For 1,500 hosts, you need to carefully consider several factors:
+Concurrency Control
+Don't launch too many concurrent deployments
+Consider system limits:
+SSH connection limits
+Network bandwidth
+Remote hosts' capacity
+Local machine resources
+A reasonable number of workers might be 10-20, not hundreds
+Batch Processing
+Consider processing hosts in batches
+Example:
+Process 100 hosts at a time
+Wait for batch completion
+Move to next batch
+This prevents overwhelming systems
+Error Handling
+With 1,500 hosts, failures are likely
+Need robust error tracking
+Consider categorizing failures:
+Network issues (retryable)
+Authentication failures
+Host unreachable
+Maybe implement retry logic for certain errors
+Progress Tracking
+Need way to track progress across all hosts
+Important to know:
+How many completed
+How many failed
+Which hosts are pending
+Consider logging to file/database
+Resource Management
+Implement rate limiting
+Add timeouts for deployments
+Consider deployment windows (not all at once)
+This scale requires more robust architecture than just a simple worker pool.

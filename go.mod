@@ -1,4 +1,4 @@
-module ebpf-test
+module bpfluga
 
 go 1.24.0
 

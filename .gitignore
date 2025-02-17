@@ -1,1 +1,6 @@
 deploy.yaml
+bpfluga.code-workspace
+.vscode
+coordinator
+loader/loader
+bpf/minimal.o

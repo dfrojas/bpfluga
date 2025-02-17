@@ -20,6 +20,7 @@ type HostConfig struct {
 type EBPFConfig struct {
 	SourceType       string `yaml:"sourceType"`
 	FilePath         string `yaml:"filePath"`
+	FileOutputPath   string `yaml:"fileOutputPath"`
 	CompileFlags     string `yaml:"compileFlags"`
 	LoaderPath       string `yaml:"loaderPath"`
 	LoaderOutputPath string `yaml:"loaderOutputPath"`
@@ -40,6 +41,13 @@ type CompileResult struct {
 	name       string
 	outputPath string
 	err        error
+}
+
+// This is for the queue.
+type DeployJob struct {
+	host      HostConfig
+	loaderBin string
+	ebpfObj   string
 }
 
 func loadConfig(filename string) (*DeployConfig, error) {
@@ -79,7 +87,7 @@ func compileLoader(loaderPath string, loaderOutputPath string) <-chan CompileRes
 			"GOARCH=amd64",
 			"CGO_ENABLED=0",
 		)
-	
+
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			resultChannel <- CompileResult{"loader", "", fmt.Errorf("Failed to compile loader: %v: %s", err, output)}
@@ -91,10 +99,11 @@ func compileLoader(loaderPath string, loaderOutputPath string) <-chan CompileRes
 	return resultChannel
 }
 
-func compileEBPF(filePath string) <-chan CompileResult {
+func compileEBPF(filePath string, ebpfObjOutputPath string) <-chan CompileResult {
 	resultChannel := make(chan CompileResult)
 
 	go func() {
+		defer close(resultChannel)
 		// TODO: Verify CO-RE or see the possibility to compile for a matrix of Kernels.
 		cmd := exec.Command(
 			"clang",
@@ -105,7 +114,7 @@ func compileEBPF(filePath string) <-chan CompileResult {
 			"-c",
 			filePath,
 			"-o",
-			filePath+".o",
+			ebpfObjOutputPath,
 		)
 
 		output, err := cmd.CombinedOutput()
@@ -120,6 +129,67 @@ func compileEBPF(filePath string) <-chan CompileResult {
 	return resultChannel
 }
 
+func deployToHost(deployJob DeployJob) error {
+	address := deployJob.host.Address
+	user := deployJob.host.User
+	keyPath := deployJob.host.PrivateKeyPath
+
+	userAndAddress := fmt.Sprintf("%s@%s", user, address)
+
+	loaderBin := deployJob.loaderBin
+	ebpfObj := deployJob.ebpfObj
+
+	remoteLoader := "/tmp/loader"
+	remoteObj := "/tmp/minimal.o"
+
+	// 1. Copy the loader binary to the remote machine
+	scpCmd1 := exec.Command("scp", "-i", keyPath, loaderBin, fmt.Sprintf("%s:%s", userAndAddress, remoteLoader))
+	if out, err := scpCmd1.CombinedOutput(); err != nil {
+		return fmt.Errorf("Failed to SCP loader: %v\nOutput: %s", err, out)
+	}
+
+	// 2. Copy the minimal.o eBPF object
+	scpCmd2 := exec.Command("scp", "-i", keyPath, ebpfObj, fmt.Sprintf("%s:%s", userAndAddress, remoteObj))
+	if out, err := scpCmd2.CombinedOutput(); err != nil {
+		return fmt.Errorf("Failed to SCP eBPF .o file: %v\nOutput: %s", err, out)
+	}
+
+	// 3. SSH to run the loader
+	runCmd := fmt.Sprintf("chmod +x %s && (sudo %s -obj %s > /tmp/loader.log 2>&1 & disown) && echo 'Loader started in background' && exit", remoteLoader, remoteLoader, remoteObj)
+
+	remoteCmd := fmt.Sprintf("'%s'", runCmd)
+	sshCmd := exec.Command("ssh", "-i", keyPath, userAndAddress, "bash", "-c", remoteCmd)
+
+	out, err := sshCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("Loader execution failed: %v\nOutput: %s", err, out)
+	}
+	log.Printf("Loader ran successfully! Output:\n%s", out)
+
+	return nil
+
+	// 4. (Optional) Cleanup ephemeral files
+	// cleanupCmd := fmt.Sprintf("rm %s %s", remoteLoader, remoteObj)
+	// sshCleanup := exec.Command("ssh", "-i", keyPath, host, cleanupCmd)
+	// if out, err := sshCleanup.CombinedOutput(); err != nil {
+	// 	log.Printf("Cleanup warning: %v\nOutput: %s", err, out)
+	// }
+	// log.Println("Cleanup done, ephemeral agentless approach complete.")
+}
+
+func deployWorker(deployJobs <-chan DeployJob, results chan<- error) {
+	for deployJob := range deployJobs {
+		log.Printf("Starting deployment to host %s", deployJob.host.Address)
+		err := deployToHost(deployJob)
+		if err != nil {
+			results <- fmt.Errorf("Failed to deploy to host %s: %v", deployJob.host.Address, err)
+			continue
+		}
+		results <- nil
+		log.Printf("Deployment to host %s completed successfully", deployJob.host.Address)
+	}
+}
+
 func main() {
 	deployConfigPath := os.Args[1]
 
@@ -128,22 +198,15 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	host := deployConfig.Hosts[0]
-	address := host.Address
-	user := host.User
-	keyPath := host.PrivateKeyPath
-
-	userAndAddress := fmt.Sprintf("%s@%s", user, address)
-
 	loaderResultChan := compileLoader(deployConfig.EBPF.LoaderPath, deployConfig.EBPF.LoaderOutputPath)
-	ebpfResultChan := compileEBPF(deployConfig.EBPF.FilePath)
+	ebpfResultChan := compileEBPF(deployConfig.EBPF.FilePath, deployConfig.EBPF.FileOutputPath)
 
-	loaderResult := <- loaderResultChan
-    ebpfResult := <- ebpfResultChan
+	loaderResult := <-loaderResultChan
+	ebpfResult := <-ebpfResultChan
 
-    if loaderResult.err != nil {
-        log.Fatalf("Loader compilation failed: %v", loaderResult.err)
-    }
+	if loaderResult.err != nil {
+		log.Fatalf("Loader compilation failed: %v", loaderResult.err)
+	}
 	if ebpfResult.err != nil {
 		log.Fatalf("eBPF compilation failed: %v", ebpfResult.err)
 	}
@@ -154,39 +217,22 @@ func main() {
 	loaderBin := loaderResult.outputPath
 	ebpfObj := ebpfResult.outputPath
 
-	remoteLoader := "/tmp/loader"
-	remoteObj := "/tmp/minimal.o"
+	numWorkers := 2  // TODO: Investigate more about this.
+	deployJobs := make(chan DeployJob, numWorkers)
+	deployResults := make(chan error, numWorkers)
 
-	// 1. Copy the loader binary to the remote machine
-	scpCmd1 := exec.Command("scp", "-i", keyPath, loaderBin, fmt.Sprintf("%s:%s", userAndAddress, remoteLoader))
-	if out, err := scpCmd1.CombinedOutput(); err != nil {
-		log.Fatalf("Failed to SCP loader: %v\nOutput: %s", err, out)
+	for i := 0; i < numWorkers; i++ {
+		go deployWorker(deployJobs, deployResults)
 	}
 
-	// 2. Copy the minimal.o eBPF object
-	scpCmd2 := exec.Command("scp", "-i", keyPath, ebpfObj, fmt.Sprintf("%s:%s", userAndAddress, remoteObj))
-	if out, err := scpCmd2.CombinedOutput(); err != nil {
-		log.Fatalf("Failed to SCP eBPF .o file: %v\nOutput: %s", err, out)
+	for _, host := range deployConfig.Hosts {
+		deployJobs <- DeployJob{host, loaderBin, ebpfObj}
 	}
+	close(deployJobs)
 
-	// 3. SSH to run the loader
-	runCmd := fmt.Sprintf("chmod +x %s && (sudo %s -obj %s > /tmp/loader.log 2>&1 & disown) && echo 'Loader started in background' && exit", remoteLoader, remoteLoader, remoteObj)
-
-	// SSH COMMAND
-	remoteCmd := fmt.Sprintf("'%s'", runCmd)
-	sshCmd := exec.Command("ssh", "-i", keyPath, userAndAddress, "bash", "-c", remoteCmd)
-
-	out, err := sshCmd.CombinedOutput()
-	if err != nil {
-		log.Fatalf("Loader execution failed: %v\nOutput: %s", err, out)
+	for i := 0; i < numWorkers; i++ {
+		if err := <-deployResults; err != nil {
+			log.Printf("Failed to deploy to host %s: %v", deployConfig.Hosts[i].Address, err)
+		}
 	}
-	log.Printf("Loader ran successfully! Output:\n%s", out)
-
-	// 4. (Optional) Cleanup ephemeral files
-	// cleanupCmd := fmt.Sprintf("rm %s %s", remoteLoader, remoteObj)
-	// sshCleanup := exec.Command("ssh", "-i", keyPath, host, cleanupCmd)
-	// if out, err := sshCleanup.CombinedOutput(); err != nil {
-	// 	log.Printf("Cleanup warning: %v\nOutput: %s", err, out)
-	// }
-	// log.Println("Cleanup done, ephemeral agentless approach complete.")
 }
