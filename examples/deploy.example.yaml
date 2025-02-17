@@ -1,0 +1,20 @@
+hosts:
+  - name: "host1"
+    address: "host1.example.com"
+    port: 22
+    user: "root"
+    privateKeyPath: "~/.ssh/id_rsa"
+  - name: "host2"
+    address: "host2.example.com"
+    port: 22
+    user: "root"
+    privateKeyPath: "~/.ssh/id_rsa"
+
+ebpf:
+  sourceType: "local"  # Could be 'local' or 'inline'
+  filePath: "./bpf/minimal.c"  # If local
+  compileFlags: "-O2"
+
+metrics:
+  - name: "tcp_connections"
+    description: "Count active TCP connections"
