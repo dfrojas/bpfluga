@@ -1,3 +1,8 @@
+/*
+Here is where the cilium/ebpf library loads the eBPF program. The coordinator.go could be written in any language,
+at the end, it is just an orchestrator script that sends the eBPF program to the remote machine and runs it. This file
+is the reason why I chose Go.
+*/
 package main
 
 import (
@@ -39,7 +44,7 @@ func main() {
 	defer prog.Close()
 
 	// 4. Attach the program via kprobe to sys_clone
-	kprobe, err := link.Kprobe("sys_clone", prog, nil)
+	_, err = link.Kprobe("sys_clone", prog, nil)
 	if err != nil {
 		log.Fatalf("Failed to attach kprobe: %v", err)
 	}

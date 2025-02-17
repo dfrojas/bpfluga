@@ -17,9 +17,11 @@ type HostConfig struct {
 }
 
 type EBPFConfig struct {
-	SourceType   string `yaml:"sourceType"`
-	FilePath     string `yaml:"file_path"`
-	CompileFlags string `yaml:"compileFlags"`
+	SourceType       string `yaml:"sourceType"`
+	FilePath         string `yaml:"filePath"`
+	CompileFlags     string `yaml:"compileFlags"`
+	LoaderPath       string `yaml:"loaderPath"`
+	LoaderOutputPath string `yaml:"loaderOutputPath"`
 }
 
 type MetricsConfig struct {
@@ -48,8 +50,56 @@ func loadConfig(filename string) (*DeployConfig, error) {
 	return &deployConfig, nil
 }
 
-func main() {
+func compileLoader(loaderPath string, loaderOutputPath string) string {
+	// We assume that always the architecture is AMD64 just for the PoC since this is the chip of my local machine.
+	// for future implementation, I'll add support to compile with different flags.
+	cmd := exec.Command(
+		"go",
+		"build",
+		"-ldflags",
+		"-extldflags \"-static\"",
+		"-o",
+		loaderOutputPath,
+		loaderPath,
+	)
 
+	cmd.Env = append(os.Environ(),
+		"GOOS=linux",
+		"GOARCH=amd64",
+		"CGO_ENABLED=0",
+	)
+
+	fmt.Println(cmd.String())
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Fatalf("Failed to compile loader: %v\nOutput: %s", err, output)
+	}
+
+	return loaderOutputPath
+}
+
+func compileEBPF(filePath string) string {
+	cmd := exec.Command(
+		"clang",
+		"-O2",
+		"-g",
+		"-target",
+		"bpf",
+		"-c",
+		filePath,
+		"-o",
+		filePath+".o",
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Fatalf("Failed to compile eBPF: %v\nOutput: %s", err, output)
+	}
+
+	return filePath + ".o"
+}
+
+func main() {
 	deployConfigPath := os.Args[1]
 
 	deployConfig, err := loadConfig(deployConfigPath)
@@ -58,16 +108,14 @@ func main() {
 	}
 
 	host := deployConfig.Hosts[0]
-
 	address := host.Address
 	user := host.User
+	keyPath := host.PrivateKeyPath
 
 	userAndAddress := fmt.Sprintf("%s@%s", user, address)
 
-	keyPath := host.PrivateKeyPath
-	// loaderBin := deployConfig.EBPF.FilePath -> Coordinador debería compilar el loader?
-	loaderBin := "./loader/loader"
-	ebpfObj := "./bpf/minimal.o" // TODO: compilar el ebpfObj?
+	loaderBin := compileLoader(deployConfig.EBPF.LoaderPath, deployConfig.EBPF.LoaderOutputPath)
+	ebpfObj := compileEBPF(deployConfig.EBPF.FilePath)
 
 	remoteLoader := "/tmp/loader"
 	remoteObj := "/tmp/minimal.o"
