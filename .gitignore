@@ -4,3 +4,6 @@ bpfluga.code-workspace
 coordinator
 loader/loader
 bpf/minimal.o
+to_consider
+PoC
+tools

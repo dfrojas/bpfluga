@@ -13,8 +13,15 @@ load:
 start-vm:
 	limactl start vm_ebpf
 
+stop-vm:
+	limactl stop vm_ebpf
+
 open-vm:
 	limactl shell vm_ebpf
 
 create-vm:
-	limactl create vm_ebpf
+	limactl create vm_ebpf.yaml
+
+delete-vm:
+	limactl stop vm_ebpf
+	limactl delete vm_ebpf

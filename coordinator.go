@@ -9,6 +9,7 @@ import (
 	"os/exec"
 )
 
+// TODO: Remember to investigate how to separate the YAML tags.
 type HostConfig struct {
 	Name           string `yaml:"name"`
 	Address        string `yaml:"address"`
@@ -26,6 +27,7 @@ type EBPFConfig struct {
 	LoaderOutputPath string `yaml:"loaderOutputPath"`
 }
 
+// For later use.
 type MetricsConfig struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
@@ -54,7 +56,7 @@ type Context map[string]interface {}
 
 type JobHandler interface {
 	Start() error
-	JobTransition(stepName string, next func(Context) error, ctx Context) error
+	JobTransition(currentStepName string, next func(Context) error, ctx Context) error
 }
 
 type Task struct {}
@@ -110,7 +112,6 @@ func (t *Task) CompileEBPF(ctx Context) error {
 func (t *Task) DeployToHost(ctx Context) error {
 	return t.JobTransition("deployToHost", t.JobComplete, nil)
 }
-
 
 func loadConfig(filename string) (*DeployConfig, error) {
 	data, err := os.ReadFile(filename)
@@ -253,34 +254,11 @@ func deployWorker(deployJobs <-chan DeployJob, results chan<- error) {
 }
 
 func main() {
-	// deployConfigPath := os.Args[1]
-
-	// deployConfig, err := loadConfig(deployConfigPath)
-	// if err != nil {
-	// 	log.Fatalf("Failed to load config: %v", err)
-	// }
-
 	var job JobHandler = &Task{}
 	err := job.Start()
 	if err != nil {
 		log.Fatalf("Failed to start job: %v", err)
 	}
-
-	// loaderResultChan := compileLoader(deployConfig.EBPF.LoaderPath, deployConfig.EBPF.LoaderOutputPath)
-	// ebpfResultChan := compileEBPF(deployConfig.EBPF.FilePath, deployConfig.EBPF.FileOutputPath)
-
-	// loaderResult := <-loaderResultChan
-	// ebpfResult := <-ebpfResultChan
-
-	// if loaderResult.err != nil {
-	// 	log.Fatalf("Loader compilation failed: %v", loaderResult.err)
-	// }
-	// if ebpfResult.err != nil {
-	// 	log.Fatalf("eBPF compilation failed: %v", ebpfResult.err)
-	// }
-
-	// log.Printf("Loader compiled successfully: %s", loaderResult.outputPath)
-	// log.Printf("eBPF compiled successfully: %s", ebpfResult.outputPath)
 
 	// loaderBin := loaderResult.outputPath
 	// ebpfObj := ebpfResult.outputPath

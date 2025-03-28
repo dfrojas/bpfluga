@@ -1,4 +1,3 @@
-# This example requires Lima v0.8.0 or later
 images:
 # - location: "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"
 #   arch: "x86_64"
@@ -26,3 +25,5 @@ provision:
     apt-get install -y python3-pip
     apt-get install -y linux-headers-$(uname -r)
     apt-get install -y libbpf-dev
+    apt-get install -y openjdk-11-jdk
+    apt-get install -y zsh
